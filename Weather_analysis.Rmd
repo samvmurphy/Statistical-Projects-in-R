@@ -1,0 +1,173 @@
+---
+title: "project1"
+author: "Sam Murphy"
+date: "10/3/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(spData)
+library(gganimate)
+library(data.table)
+library(maps)
+library(rnaturalearth)
+library(gifski)
+```
+Here I am importing all packages I will need for this entire project. I think it is good practice to do it here so if I restart R, and my environment gets cleared, I can run 1 cell and get all of my packages back.
+```{r}
+col_names = c(
+  'SID','Season', 'Number', 'Basin', 'Subbasin', 'Name', 'ISO_Time', 'Nature', 'Lat', 'Lon', 'WMO_Wind', 'WMO_Pres' , 'WMO_Agency', 'Track_Type', 'Dist2land', 'Landfall')
+
+coltypes = c(
+  'character', 'integer', 'integer', 'character', 'character', 'character', 'character','character','double','double', 'integer', 'integer', 'character', 'character', 'integer', 'integer')
+
+dat = read.csv(
+  file = '/Users/samuelmurphy/stat133/project1/ibtracs.NA.list.v04r00.csv',
+  colClasses = c(coltypes, rep("NULL", 147)),
+  col.names = c(col_names, rep("NULL", 147)),
+  stringsAsFactors = FALSE,
+  skip = 77876,
+  na.strings = TRUE
+)
+dat$ISO_TIME = as.POSIXct(dat$ISO_Time) # Converts the ISO_Time column to a time structure. This will be helpful later because doing logical operations on characters is restricted (ie. Time < x). Thus, once it's converted to a time structure and can be sorted.
+dat$MONTH <- lubridate::month(dat$ISO_Time)
+str(dat, vec.len = 1)
+#Basin column, North America is NA but that is also "Not Applicable", need to convert it to something else.
+#subbasin should be converted to MM (missing) instead of NA
+
+```
+
+```{r, c1}
+#Are hurricanes becoming more frequent?
+#Once winds hit 64 knots, it's classified as a hurricane. 
+# Only tropical cyclone that form over the Atlantic Ocean or Eastern Pacific Ocean are called Hurricanes.
+dat = dat %>%
+  mutate(Basin = ifelse(is.na(Basin) == TRUE, "NA", Basin)) # NA means North Atlantic, not Not Applicable. NA means a specific thing in R so I converted NA to a string.
+
+counts_of_hurr = dat %>%
+  filter(WMO_Wind >= 64 & c(Basin == "NA" | Basin == "EP") & Season < 2020) %>%
+  group_by(Season) %>%
+  distinct(SID) %>%
+  summarise(
+    count = n()
+  )
+counts_of_hurr$pct_change = (counts_of_hurr$count/lag(counts_of_hurr$count) - 1) * 100
+sum(counts_of_hurr$pct_change, na.rm = TRUE) # If we want to reduce it to a single number, this number indicates that the number of hurricanes has increased on average of 998.5%/(2019-1970) == 20% over this time period. If there were no hurricane growth, this number would be 0, and if the number of hurricanes decreased, it would be negative.
+
+ggplot(counts_of_hurr, aes(x = Season, y = count))+
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE) + 
+  ggtitle("Count of Hurricanes Per Year") +
+  xlab("Year") +
+  ylab("Counto of Hurricanes That Year")
+```
+Hurricanes are becoming more frequent. As seen in the code above, I took the count of number of distinct hurricanes every year and looked at it across time. The increase of hurricanes as clear when a regression line is drawn over the scatter plot but it is also clear from a quantitative perspective by looking at percent change per year and summing that number. The percent change year over year is positive so hurricanes are clearly becoming more frequent.
+```{r, c2}
+# From 1970 to 2019, are hurricanes getting stronger?
+# Immediately subset the data to hurricanes
+
+# "Stronger" is a function of WMO wind. 
+strength_of_hurrs = dat %>%
+  filter(WMO_Wind >= 64 & c(Basin == "NA" | Basin == "EP") & Season < 2020) %>%# this just subsets the original df to be only those which we define as hurricanes (>74 WMO wind and either NA or EP)
+  group_by(Season) %>% 
+  summarise(
+    avg_wind_speed = mean(WMO_Wind, na.rm = TRUE) # This line states we will get the average wind speed per Season (year). This is relevant in answering the question "Are hurricanes getting stonger" because we need to track year-by-year so we can see the trend over time.
+  )
+
+ggplot(strength_of_hurrs, aes(x = Season, y = avg_wind_speed)) +
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE)+ ggtitle("Average Wind Speeds Per Year") +
+  xlab("Year") +
+  ylab("Wind Speed (in Knots)")
+# The piece of code above plots the average wind speed for every year from 1970 to 2019. I also overlayed a regression line, which has a positive slope, to illustrate that hurricanes are indeed getting stronger. 
+strength_of_hurrs$pct_change = (strength_of_hurrs$avg_wind_speed/lag(strength_of_hurrs$avg_wind_speed) - 1) * 100
+pct_increase_windspeed = sum(strength_of_hurrs$pct_change, na.rm = TRUE)
+paste('Hurricanes over the period 1970 to 2019 have gotten stronger by: ',round(pct_increase_windspeed, 4),"%. ", "The sum of all of the percents would equal 0 if there were no change throughout time, would be negative if wind speeds decreased on average over time and shows that wind speeds are increasing over time with a positive number. ", sep = "")
+```
+The question at hand is "Are hurricanes getting stronger, year over year?" And to answer this question, we must first define a few things. First, tropical cyclones that have winds that exceed 64 knots/hour are classified as hurricanes, so only storms with those winds will be considered. Hurricanes also only occur in the North Atlantic (NA) and Eastern North Pacific (EP), so we will also apply a filter for that (even tho this is redundant because the only factors in this dataset are NA and EP. With these filters applied, I took the mean wind speeds of hurricanes for each year and looked at the mean over time. As seen visually with my regression line + scatter plot or my percent change over time, both indicate hurricanes are getting stronger. There is a positive percent change over time, which means the speeds are increasing and the regression line has a positive slope, which also concurs that wind speeds of hurricanes are increasing over time.
+
+```{r, c3_a}
+#a)
+# Atlantic hurricane season: June 1st to Nov 30th
+c3_a = dat %>%
+  filter(ISO_TIME >= '2019-06-01 00:00:00' & ISO_TIME <= '2019-11-30 00:00:00') %>%
+  group_by(SID) %>%
+  count(Name)
+length(c3_a$SID) == 20 #There aren't 20 unique hurricanes during this time period.
+```
+As seen in c3_a, there are 19 columns of storms which we have data on in the 2019 Atlantic Hurricane Season and two of the rows are "NOT_NAMED". Thus, there were 17 named storms in the 2019 Atlantic Hurricane Season. I first filtered the original data set to be between the Atlantic Hurricane Season (June 1 2019 to Nov 30 of 2019). Then I realized that each storm, irrespective of name has a unique SID, so I grouped by SID and counted Name. That yielded 19 rows, each unique storm and 2 of the storms were called "NOT_NAMED". Thus the statement "The 2019 Atlantic hurricane season had 20 tropical cyclones, of which 18 were named storms." is incorrect.
+
+```{r, c3_b}
+c3_b = dat %>%
+  filter(ISO_TIME >= '2019-06-01 00:00:00' & ISO_TIME <= '2019-11-30 00:00:00' & WMO_Wind >= 64 & Name != "NOT_NAMED") %>%
+  group_by(SID) %>%
+  distinct(Name)
+c3_b
+length(c3_b$SID)
+```
+I was able to use the same code from the chunk above with the added condition of the Tropical Cyclone being a hurricane (ie. WMO_Wind must exceed 64 knots). As seen in the output of the code above, there are  7 rows that meets the given conditions (in the time frame and classified as a hurricane in terms of wind speed & not named "NOT_NAMED"). Thus, the statement "The 2019 Atlantic hurricane season had six named storms that achieved hurricane status." is correct but misleading because it had 7 (6 is a subset of 7).
+
+```{r, c3_c}
+# Pertinent info: "Major Hurricanes" are category 3+ (96+ knot/hour wind speeds). So this question is asking if the number of hurricanes with the wind constraint of 96+ == 137+ (category 5 is 157 or higher). I 
+c3_c_major_hurr = dat %>%
+  filter(ISO_TIME >= '2019-06-01 00:00:00' & ISO_TIME <= '2019-11-30 00:00:00' & WMO_Wind >= 96) %>%
+  distinct(Name)
+c3_c_cat_5 = dat %>%
+  filter(ISO_TIME >= '2019-06-01 00:00:00' & ISO_TIME <= '2019-11-30 00:00:00' & WMO_Wind >= 137) %>%
+  distinct(Name)
+length(c3_c_major_hurr$Name) == length(c3_c_cat_5$Name)
+```
+As seen above, the lengths of the two data sets are different due to the different conditions applied to them. Thus, category 3+ is not the same subset as category 5 so the statement is false. In other words, there are "major storms" in the 2019 Hurricane Season that weren't category 5. In other words, category 3 hurricanes are a subset of category 5, and not all category 3 hurricanes evolved into category 5 for the data at hand.
+
+
+```{r, c3_d}
+#There was one storm in 2019 that formed outside the official hurricane season (recall that the official season goes from June 1 to November 30).
+c3_d = dat %>%
+  filter(!c(ISO_TIME >= '2019-06-01 00:00:00' & ISO_TIME <= '2019-11-30 00:00:00') & Season == 2019) %>%
+  distinct(Name)
+length(c3_d$Name) == 1
+```
+As seen above, there is indeed 1 storm that formed outside the official hurricane season in 2019. What I did was used the "!" operator to exclude that data while using the "&" to say for all 2019, except in "this" range, print the distinct names. There is only 1 name so the statement above is correct.
+
+```{r, c3_e}
+# Two storms became Category 5 hurricanes, at least one storm making landfall at Category 5 intensity.
+c3_e = dat %>%
+  filter(ISO_TIME >= '2019-06-01 00:00:00' & ISO_TIME <= '2019-11-30 00:00:00' & Landfall == 0 & WMO_Wind >136) %>%
+  distinct(Name)
+c3_e
+```
+Landfall looks at nearest location to land within 0 hours. Thus, I set a condition to my data that landfall must hit 0. Thus, there were no cat-5 hurricanes that made landfall. 
+
+```{r, c4}
+only_2019_data = dat %>%
+  filter(Season == 2019) %>%
+  group_by(Name) %>%
+  arrange(ISO_TIME)
+
+world_map = map_data("world")
+gg_world = ggplot() +
+  geom_polygon(data = world_map, aes(x = long, y = lat, group = group),
+               fill = "grey70", color = "black", size = 0.2) + 
+  theme_bw()
+static_map = gg_world + geom_point(data = only_2019_data, aes(x = Lon, y = Lat, color = Name, size = WMO_Wind), alpha = 0.5, cex = 0.5) + 
+  xlim(c(-150, 0)) + 
+  ylim(c(0, 100)) +
+  guides(col = guide_legend(ncol = 2, title.theme = element_text(size = 14, face = "bold"))) +
+  theme(legend.text = element_text(size = 14))
+
+anim = static_map + labs(title = 'Time: {frame_time}', x= 'Longitude', y = ' Latitude') + transition_time(ISO_TIME) + shadow_wake(.2) + ease_aes('linear')
+
+animate(anim, duration = 40, fps = 4, width = 700, height = 700) 
+#There are 365 days in 2019 (not a leap year) and I want the entire cycle to complete in 30 seconds. Thus, each second will be roughly 12 days 
+#
+anim_save("weatherfor2019.gif", animation = last_animation(), path = '/Users/samuelmurphy/Desktop')
+```
+The map displayed shows the path of each storm. I achieved this by filtering by year (only 2019) and grouping by name then arranging on the basis of time. Each data point for each storm is a latitude and longitude coordinate, which I inputted in "static_map". What the animate function is doing, is plotting each data point sequentially, showing the viewer where the storm moved over time. The reason arranging on the basis of time was so important is that the animate function is essentially a smooth, looped, slideshow and if the slides weren't in order, it would be impossible to track where the storm trajectory is. 
+At a high level, I imported a map of the world and then inputted data throughout time for hurricanes. Then, the R package gifski pieced the data together and compiled it into a movie, giving a relatively high definition idea of how the hurricanes move. Then I added cosmetic (but essential) elements to the graph like coloring, a legend and other things like that. What's important to notice above the movie is we can see when, in the hurricane season, most hurricanes occur: September. 
